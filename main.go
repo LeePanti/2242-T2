@@ -5,9 +5,15 @@
 package main
 
 import (
+	"io"
 	"log"
 	"mime"
 	"net/http"
+	"os"
+
+	"github.com/goji/httpauth"
+	"github.com/gorilla/handlers"
+	"github.com/justinas/alice"
 )
 
 /* ---------------------------------------------------------------- */
@@ -86,6 +92,27 @@ func headersHandler(w http.ResponseWriter, r *http.Request) {
 
 /* ---------------------------------------------------------------- */
 
+// handler functions for third party middlewares
+
+// handler function after third party authentication middleware
+func landingPage(w http.ResponseWriter, r *http.Request) {
+	log.Print("landing page route Handler successfully called. \n\n")
+	w.Write([]byte("Middleware successfully Executed."))
+}
+
+// handler function after third party request logging middleware
+func loggingFile(w http.ResponseWriter, r *http.Request) {
+	log.Print("logging file route Handler successfully called. \n\n")
+	w.Write([]byte("Middleware successfully Executed."))
+}
+
+// constructor function for logging middleware
+func newLoggingHandler(file io.Writer) func(http.Handler) http.Handler {
+	return func(h http.Handler) http.Handler {
+		return handlers.LoggingHandler(file, h)
+	}
+}
+
 func main() {
 	// router to handle the endpoints
 	mux := http.NewServeMux()
@@ -98,9 +125,33 @@ func main() {
 	contentTypeHandler := http.HandlerFunc(headersHandler)
 	mux.Handle("/headers", contentTypeHeaders(enforceJASONHandler(contentTypeHandler)))
 
+	// third party middleware for authentication before calling the handler
+	authMiddleware := httpauth.SimpleBasicAuth("lee", "pass")
+	landingPageHandler := http.HandlerFunc(landingPage)
+	mux.Handle("/signup", authMiddleware(landingPageHandler))
+
+	// third party middleware for request logging before calling the handler
+	logFile, err := os.OpenFile("server.log", os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0664)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	loggingHandler := http.HandlerFunc(loggingFile)
+	mux.Handle("/log", handlers.LoggingHandler(logFile, loggingHandler))
+
+	// logging requests with constructor function
+	loggingFileHandler := http.HandlerFunc(loggingFile)
+	handleLogs := newLoggingHandler(logFile)
+	mux.Handle("/constructor", handleLogs(loggingFileHandler))
+
+	// easily chaining middleware with alice package.
+	middleWareChain := alice.New(middleWareA, middleWareB)
+
+	mux.Handle("/easychain", middleWareChain.Then(http.HandlerFunc(home)))
+
 	// setting up the server
 	log.Println("Starting server on http://localhost:9000...")
-	err := http.ListenAndServe(":9000", mux)
+	err = http.ListenAndServe(":9000", mux)
 	if err != nil {
 		log.Fatal(err)
 	}
